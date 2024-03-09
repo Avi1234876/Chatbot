@@ -1,0 +1,223 @@
+import nltk
+from nltk.stem import WordNetLemmatizer
+from nltk.corpus import stopwords
+import random
+import pickle
+import numpy as np
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+import requests
+import json
+import re
+import spacy
+from collections import defaultdict
+import datetime
+import wikipedia
+import googlesearch
+from googletrans import Translator
+from bs4 import BeautifulSoup
+import urllib.request
+
+# Download required NLTK resources
+nltk.download('punkt')
+nltk.download('wordnet')
+nltk.download('stopwords')
+nltk.download('averaged_perceptron_tagger')
+
+# Initialize the lemmatizer, stopwords, spacy, and translator
+lemmatizer = WordNetLemmatizer()
+stop_words = set(stopwords.words('english'))
+nlp = spacy.load('en_core_web_sm')
+translator = Translator()
+
+# Define a dictionary to store intents and their corresponding responses
+intents = {}
+
+# Example intents and responses
+intents['greeting'] = ["Hello", "Hi", "Hey"]
+intents['goodbye'] = ["Goodbye", "See you later", "Bye"]
+intents['thanks'] = ["You're welcome", "No problem", "Glad to help"]
+intents['weather'] = ["What's the weather like today?", "How's the weather?"]
+intents['joke'] = ["Tell me a joke", "Can you make me laugh?"]
+intents['name'] = ["What's your name?", "Who are you?"]
+intents['age'] = ["How old are you?", "What's your age?"]
+intents['capabilities'] = ["What can you do?", "What are your capabilities?"]
+
+# Load or create the intents dictionary
+try:
+    with open('intents.pkl', 'rb') as f:
+        intents = pickle.load(f)
+except FileNotFoundError:
+    pass
+
+# Function to preprocess user input
+def preprocess_text(text):
+    tokens = nltk.word_tokenize(text.lower())
+    tokens = [lemmatizer.lemmatize(token) for token in tokens if token not in stop_words]
+    return tokens
+
+# Function to vectorize text
+def vectorize_text(text):
+    tfidf_vectorizer = TfidfVectorizer()
+    vectorized_text = tfidf_vectorizer.fit_transform([text])
+    return vectorized_text
+
+# Function to classify user input
+def classify_input(user_input):
+    preprocessed_input = preprocess_text(user_input)
+    vectorized_input = vectorize_text(' '.join(preprocessed_input))
+    intent_vectors = []
+    for intent, patterns in intents.items():
+        intent_vector = np.mean([vectorize_text(' '.join(preprocess_text(pattern))) for pattern in patterns], axis=0)
+        intent_vectors.append(intent_vector)
+    similarities = cosine_similarity(vectorized_input, intent_vectors)
+    most_similar_intent = intents.keys()[np.argmax(similarities)]
+    return most_similar_intent
+
+# Function to generate a response
+def generate_response(intent, user_input):
+    if intent in intents:
+        return random.choice(intents[intent])
+    elif intent == 'weather':
+        # Call an external weather API and return the response
+        api_key = 'YOUR_API_KEY'
+        base_url = 'http://api.openweathermap.org/data/2.5/weather?'
+        city_name = 'New York'
+        complete_url = base_url + 'appid=' + api_key + '&q=' + city_name
+        response = requests.get(complete_url)
+        data = response.json()
+        if data['cod'] != '404':
+            weather_description = data['weather'][0]['description']
+            temperature = round(data['main']['temp'] - 273.15, 2)
+            return f"The weather in {city_name} is currently {weather_description} with a temperature of {temperature}°C."
+        else:
+            return "Sorry, I couldn't retrieve the weather information for that location."
+    elif intent == 'joke':
+        # Return a predefined joke
+        jokes = [
+            "Why don't scientists trust atoms? Because they make up everything!",
+            "I tried to catch some fog earlier. I mist.",
+            "What do you call a fake noodle? An Impasta.",
+            # Add more jokes here
+        ]
+        return random.choice(jokes)
+    elif intent == 'name':
+        return "My name is Claude, and I'm an AI assistant created by Anthropic."
+    elif intent == 'age':
+        return "I don't have an age in the traditional sense, as I'm an artificial intelligence without a physical form."
+    elif intent == 'capabilities':
+        return "I'm a general-purpose AI assistant capable of natural language processing, answering questions, providing information, and assisting with various tasks like writing, analysis, and coding. My knowledge spans a wide range of topics, but I don't have access to real-time data or the ability to learn on my own."
+    elif intent == 'wikipedia':
+        try:
+            summary = wikipedia.summary(user_input, sentences=2)
+            return summary
+        except wikipedia.exceptions.DisambiguationError as e:
+            return f"There are multiple pages matching your query '{user_input}'. Please be more specific."
+        except wikipedia.exceptions.PageError:
+            return f"Sorry, I couldn't find any Wikipedia page matching '{user_input}'."
+    elif intent == 'google_search':
+        search_query = user_input.replace('search', '').strip()
+        try:
+            search_results = googlesearch.search(search_query, num_results=3)
+            result_text = f"Here are the top 3 search results for '{search_query}':\n"
+            for idx, result in enumerate(search_results, start=1):
+                result_text += f"{idx}. {result}\n"
+            return result_text
+        except Exception as e:
+            return f"Sorry, I couldn't perform the Google search for '{search_query}'. Error: {str(e)}"
+    elif intent == 'translate':
+        text_to_translate = re.sub(r'translate\s*to\s*\w+\s*', '', user_input, flags=re.IGNORECASE)
+        target_lang = re.search(r'to\s*(\w+)', user_input, re.IGNORECASE).group(1)
+        try:
+            translation = translator.translate(text_to_translate, dest=target_lang)
+            return f"Here's the translation to {target_lang}: {translation.text}"
+        except Exception as e:
+            return f"Sorry, I couldn't translate '{text_to_translate}' to {target_lang}. Error: {str(e)}"
+    elif intent == 'web_scraping':
+        url = re.search(r'(https?://\S+)', user_input).group(1)
+        try:
+            with urllib.request.urlopen(url) as response:
+                html_content = response.read().decode('utf-8')
+                soup = BeautifulSoup(html_content, 'html.parser')
+                text_content = soup.get_text()
+                return f"Here's the text content from the URL '{url}':\n\n{text_content[:500]}..."
+        except Exception as e:
+            return f"Sorry, I couldn't fetch the content from '{url}'. Error: {str(e)}"
+    elif intent == 'time':
+        now = datetime.datetime.now()
+        return f"The current time is {now.strftime('%I:%M %p')}."
+    elif intent == 'date':
+        today = datetime.date.today()
+        return f"Today's date is {today.strftime('%B %d, %Y')}."
+    else:
+        return "I'm sorry, I didn't understand your request."
+
+# Function to extract named entities from user input
+def extract_entities(user_input):
+    doc = nlp(user_input)
+    entities = defaultdict(list)
+    for ent in doc.ents:
+        entities[ent.label_].append(ent.text)
+    return entities
+
+# Function to handle follow-up questions
+def handle_follow_up(user_input, context):
+    entities = extract_entities(user_input)
+    if 'PERSON' in entities:
+        person = entities['PERSON'][0]
+        # Perform a search or lookup for information about the person
+        try:
+            person_summary = wikipedia.summary(person, sentences=2)
+            return f"Here's some information about {person}:\n{person_summary}"
+        except wikipedia.exceptions.DisambiguationError:
+            return f"There are multiple pages matching '{person}'. Please be more specific."
+        except wikipedia.exceptions.PageError:
+            return f"Sorry, I couldn't find any Wikipedia information about '{person}'."
+    elif 'GPE' in entities:
+        location = entities['GPE'][0]
+        # Call an external API or lookup information about the location
+        api_key = 'YOUR_API_KEY'
+        base_url = 'http://api.openweathermap.org/data/2.5/weather?'
+        complete_url = base_url + 'appid=' + api_key + '&q=' + location
+        response = requests.get(complete_url)
+        data = response.json()
+        if data['cod'] != '404':
+            weather_description = data['weather'][0]['description']
+            temperature = round(data['main']['temp'] - 273.15, 2)
+            return f"The weather in {location} is currently {weather_description} with a temperature of {temperature}°C."
+        else:
+            return f"Sorry, I couldn't find any weather information for '{location}'."
+    elif 'DATE' in entities:
+        date = entities['DATE'][0]
+        # Perform a lookup or provide information related to the date
+        try:
+            date_obj = datetime.datetime.strptime(date, '%Y-%m-%d').date()
+            day_of_week = date_obj.strftime('%A')
+            return f"{date} was a {day_of_week}."
+        except ValueError:
+            return f"Sorry, I couldn't parse the date '{date}'. Please provide the date in the format YYYY-MM-DD."
+    else:
+        return "I'm sorry, I didn't understand your follow-up question."
+
+# Main loop to interact with the chatbot
+print("Welcome to the chatbot! Type 'quit' to exit.")
+context = {}
+while True:
+    user_input = input("> ")
+    if user_input.lower() == "quit":
+        break
+    intent = classify_input(user_input)
+    response = generate_response(intent, user_input)
+    print(response)
+
+    # Handle follow-up questions
+    if re.search(r'\?$', user_input):
+        follow_up = handle_follow_up(user_input, context)
+        print(follow_up)
+
+    # Update context with new information
+    context.update(extract_entities(user_input))
+
+# Save the updated intents dictionary
+with open('intents.pkl', 'wb') as f:
+    pickle.dump(intents, f)
